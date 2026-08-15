@@ -56,5 +56,14 @@ class Transaction(Base):
     category = relationship("Category", back_populates="transactions")
     import_batch = relationship("ImportBatch", back_populates="transactions")
 
+    @property
+    def tenant_id(self) -> uuid.UUID:
+        """Alias for user_id to enforce multi-tenant domain semantics."""
+        return self.user_id
+
+    @tenant_id.setter
+    def tenant_id(self, value: uuid.UUID) -> None:
+        self.user_id = value
+
     def __repr__(self) -> str:
         return f"<Transaction {self.type} {self.amount} @ {self.transaction_date}>"

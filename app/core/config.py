@@ -21,10 +21,11 @@ class Settings(BaseSettings):
         description="PostgreSQL connection string: postgresql+asyncpg://user:pass@host:port/db",
     )
 
-    # JWT
+    # JWT & Rotating Tokens
     SECRET_KEY: str = Field(..., description="Secret key for JWT signing")
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # Short-lived access token (30 min)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7     # Long-lived refresh token (7 days)
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]

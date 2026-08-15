@@ -42,5 +42,10 @@ class User(Base):
     transactions = relationship("Transaction", back_populates="user", lazy="selectin")
     import_batches = relationship("ImportBatch", back_populates="user", lazy="selectin")
 
+    @property
+    def tenant_id(self) -> uuid.UUID:
+        """User is the tenant root."""
+        return self.id
+
     def __repr__(self) -> str:
         return f"<User {self.email}>"

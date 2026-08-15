@@ -2,7 +2,7 @@
 Excel routes — upload, preview, confirm import, and export.
 """
 
-import uuid
+from typing import Annotated
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
@@ -24,16 +24,20 @@ router = APIRouter(prefix="/excel", tags=["Excel Import/Export"])
 
 @router.post("/upload", response_model=ExcelUploadResponse)
 async def upload_excel(
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    file: Annotated[UploadFile, File(...)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """
     Upload an Excel file for preview and column mapping.
     Does NOT save to database — returns preview + mapping suggestions.
     """
     # Validate file type
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="Apenas arquivos .xlsx são aceitos")
+    valid_extensions = (".xlsx", ".xls", ".csv")
+    if not file.filename or not file.filename.lower().endswith(valid_extensions):
+        raise HTTPException(
+            status_code=400,
+            detail="Formato inválido. Apenas arquivos .xlsx, .xls ou .csv são aceitos.",
+        )
 
     # Validate file size
     content = await file.read()
@@ -53,8 +57,8 @@ async def upload_excel(
 @router.post("/confirm", response_model=ExcelConfirmResponse)
 async def confirm_import(
     data: ExcelConfirmRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """
     Confirm column mapping and execute the import.
@@ -68,10 +72,10 @@ async def confirm_import(
 
 @router.get("/export")
 async def export_excel(
-    start_date: date | None = Query(None),
-    end_date: date | None = Query(None),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+    current_user: Annotated[User, Depends(get_current_user)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """Export transactions to a formatted Excel file."""
     file_bytes, filename = await excel_export.export_transactions(

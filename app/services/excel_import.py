@@ -213,10 +213,9 @@ def parse_br_amount(value) -> Decimal | None:
 
 async def process_upload(file_content: bytes, filename: str) -> ExcelUploadResponse:
     """
-    Process an uploaded Excel file: read, analyze columns, return preview.
-    Does NOT save to database — just stores in temp cache for confirmation.
+    Process an uploaded Excel/CSV bank statement: read with Pandas/OpenPyXL, analyze columns, return preview.
+    Does NOT save to database — stores in temp cache for user validation & reconciliation.
     """
-    # Save to temp file for pandas to read
     upload_id = str(uuid.uuid4())
     temp_dir = tempfile.mkdtemp()
     temp_path = os.path.join(temp_dir, filename)
@@ -224,14 +223,32 @@ async def process_upload(file_content: bytes, filename: str) -> ExcelUploadRespo
     with open(temp_path, "wb") as f:
         f.write(file_content)
 
-    # Read with pandas
-    df = pd.read_excel(temp_path, engine="openpyxl")
+    lower_name = filename.lower()
+    if lower_name.endswith(".csv"):
+        # Try different encodings and separators
+        df = None
+        for encoding in ("utf-8-sig", "utf-8", "latin1", "cp1252"):
+            for sep in (",", ";", "\t", "|"):
+                try:
+                    candidate = pd.read_csv(temp_path, sep=sep, encoding=encoding)
+                    if len(candidate.columns) > 1:
+                        df = candidate
+                        break
+                except Exception:
+                    continue
+            if df is not None:
+                break
+        if df is None:
+            df = pd.read_csv(temp_path, encoding="utf-8-sig")
+    else:
+        # Read Excel with openpyxl engine
+        df = pd.read_excel(temp_path, engine="openpyxl")
 
     # Analyze columns
     suggestions = analyze_columns(df)
 
-    # Build preview (first 5 rows)
-    preview_rows = df.head(5).fillna("").astype(str).to_dict(orient="records")
+    # Build preview (first 10 rows)
+    preview_rows = df.head(10).fillna("").astype(str).to_dict(orient="records")
 
     # Cache the dataframe for later confirmation
     _upload_cache[upload_id] = {
@@ -256,8 +273,8 @@ async def confirm_import(
     data: ExcelConfirmRequest,
 ) -> ExcelConfirmResponse:
     """
-    Confirm and execute import with user-validated column mapping.
-    Creates an ImportBatch and Transaction records.
+    Confirm and execute import with user-validated column mapping and bank reconciliation.
+    Creates an ImportBatch and Transaction records with duplicate detection.
     """
     cached = _upload_cache.pop(data.upload_id, None)
     if not cached:
@@ -279,6 +296,17 @@ async def confirm_import(
 
     if not date_col or not amount_col:
         raise ValueError("Mapeamento deve incluir pelo menos colunas de 'date' e 'amount'")
+
+    # Query existing user transactions for bank reconciliation & duplicate detection
+    existing_tx_res = await db.execute(
+        select(Transaction.transaction_date, Transaction.amount, Transaction.description).where(
+            Transaction.user_id == user_id
+        )
+    )
+    existing_tuples = {
+        (row.transaction_date, Decimal(str(row.amount)), (row.description or "").strip().lower())
+        for row in existing_tx_res.all()
+    }
 
     # Create import batch
     batch = ImportBatch(
@@ -323,6 +351,13 @@ async def confirm_import(
         if description == "nan":
             description = None
 
+        # Check duplicate in bank reconciliation
+        norm_desc = (description or "").strip().lower()
+        if (parsed_date.date(), parsed_amount, norm_desc) in existing_tuples:
+            errors.append(f"Linha {row_num}: lançamento duplicado detectado na conciliação e ignorado.")
+            skipped += 1
+            continue
+
         transaction = Transaction(
             user_id=user_id,
             category_id=data.default_category_id,
@@ -334,6 +369,7 @@ async def confirm_import(
             import_batch_id=batch.id,
         )
         db.add(transaction)
+        existing_tuples.add((parsed_date.date(), parsed_amount, norm_desc))
         imported += 1
 
     batch.imported_rows = imported

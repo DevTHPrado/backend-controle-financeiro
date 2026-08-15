@@ -7,7 +7,13 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import hash_password, verify_password, create_access_token
+from app.core.security import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    create_refresh_token,
+    decode_refresh_token,
+)
 from app.models.user import User
 from app.models.category import Category
 from app.schemas.user import UserCreate, UserLogin, TokenResponse, UserResponse
@@ -57,7 +63,7 @@ async def register_user(db: AsyncSession, data: UserCreate) -> UserResponse:
 
 
 async def authenticate_user(db: AsyncSession, data: UserLogin) -> TokenResponse:
-    """Authenticate user by email or username and return JWT token."""
+    """Authenticate user by email or username and return rotating JWT access + refresh tokens."""
     login_input = data.email.strip()
     result = await db.execute(
         select(User).where(
@@ -70,4 +76,44 @@ async def authenticate_user(db: AsyncSession, data: UserLogin) -> TokenResponse:
         raise ValueError("Usuário ou senha incorretos")
 
     access_token = create_access_token(data={"sub": str(user.id)})
-    return TokenResponse(access_token=access_token)
+    refresh_token = create_refresh_token(data={"sub": str(user.id)})
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        expires_in=1800,
+    )
+
+
+async def refresh_token_pair(db: AsyncSession, refresh_token_str: str) -> TokenResponse:
+    """
+    Validate refresh token, verify user exists and generate a new rotated token pair.
+    """
+    payload = decode_refresh_token(refresh_token_str)
+    if not payload:
+        raise ValueError("Refresh token inválido ou expirado")
+
+    user_id_str = payload.get("sub")
+    if not user_id_str:
+        raise ValueError("Refresh token inválido")
+
+    try:
+        user_id = uuid.UUID(user_id_str)
+    except ValueError:
+        raise ValueError("Identificador de usuário inválido no token")
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise ValueError("Usuário associado ao token não encontrado")
+
+    # Issue new rotated token pair
+    new_access = create_access_token(data={"sub": str(user.id)})
+    new_refresh = create_refresh_token(data={"sub": str(user.id)})
+
+    return TokenResponse(
+        access_token=new_access,
+        refresh_token=new_refresh,
+        token_type="bearer",
+        expires_in=1800,
+    )

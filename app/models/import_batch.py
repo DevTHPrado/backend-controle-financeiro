@@ -39,5 +39,14 @@ class ImportBatch(Base):
     user = relationship("User", back_populates="import_batches")
     transactions = relationship("Transaction", back_populates="import_batch", lazy="selectin")
 
+    @property
+    def tenant_id(self) -> uuid.UUID:
+        """Alias for user_id to enforce multi-tenant domain semantics."""
+        return self.user_id
+
+    @tenant_id.setter
+    def tenant_id(self, value: uuid.UUID) -> None:
+        self.user_id = value
+
     def __repr__(self) -> str:
         return f"<ImportBatch {self.original_filename} ({self.status})>"
